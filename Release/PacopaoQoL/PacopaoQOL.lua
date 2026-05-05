@@ -8,6 +8,7 @@ local defaults = {
     profile = {
         sonido_reenviar_efectos = false,
         sonido_canal_efectos = "Master", -- Master, Music, Ambience, Dialog
+        sonido_mantener_audio_sincronizado = false,
         ui_indicador_zona_montura = false,
         ui_indicador_zona_montura_pos = {
             point = "CENTER",
@@ -66,12 +67,49 @@ local function GetForwardChannel()
     return (p and p.sonido_canal_efectos) or "Master"
 end
 
+local function IsCinematicPlaying()
+    local cinematicShown = CinematicFrame and CinematicFrame.IsShown and CinematicFrame:IsShown()
+    local movieShown = MovieFrame and MovieFrame.IsShown and MovieFrame:IsShown()
+    return cinematicShown or movieShown
+end
+
+local function ApplyAudioSync()
+    if not SetCVar then
+        return
+    end
+    SetCVar("Sound_OutputDriverIndex", "0")
+    if Sound_GameSystem_RestartSoundSystem and not IsCinematicPlaying() then
+        Sound_GameSystem_RestartSoundSystem()
+    end
+end
+
+local function UpdateAudioSync()
+    if not audioSyncFrame then
+        audioSyncFrame = CreateFrame("Frame")
+        audioSyncFrame:SetScript("OnEvent", function()
+            local p = GetProfile()
+            if p and p.sonido_mantener_audio_sincronizado then
+                ApplyAudioSync()
+            end
+        end)
+    end
+
+    audioSyncFrame:UnregisterEvent("VOICE_CHAT_OUTPUT_DEVICES_UPDATED")
+
+    local p = GetProfile()
+    if p and p.sonido_mantener_audio_sincronizado then
+        audioSyncFrame:RegisterEvent("VOICE_CHAT_OUTPUT_DEVICES_UPDATED")
+        ApplyAudioSync()
+    end
+end
+
 local isReplaying = false
 local mountIndicatorFrame
 local mountIndicatorEditMode = false
 local meleeIndicatorFrame
 local meleeIndicatorTicker
 local meleeIndicatorEventsFrame
+local audioSyncFrame
 local function IsBlizzardEditModeActive()
     return EditModeManagerFrame and EditModeManagerFrame:IsShown()
 end
@@ -503,6 +541,28 @@ local function CreateSettings()
         return IsForwardEnabled()
     end)
 
+    local settingAudioSync = Settings.RegisterProxySetting(
+        soundCategory,
+        "PACOQOL_sonido_mantener_audio_sincronizado",
+        Settings.VarType.Boolean,
+        "Mantener audio sincronizado",
+        false,
+        function()
+            local p = GetProfile()
+            return p and p.sonido_mantener_audio_sincronizado == true
+        end,
+        function(value)
+            local p = GetProfile()
+            p.sonido_mantener_audio_sincronizado = value and true or false
+            UpdateAudioSync()
+        end
+    )
+    Settings.CreateCheckbox(
+        soundCategory,
+        settingAudioSync,
+        "Reinicia audio si cambia el dispositivo de salida para evitar desincronización."
+    )
+
     AddFeatureHeader(mountsLayout, "Indicador de Zona Montable")
 
     local settingMountIndicator = Settings.RegisterProxySetting(
@@ -715,6 +775,7 @@ boot:SetScript("OnEvent", function(_, event, loadedName)
     EnsureMeleeIndicatorEvents()
     ApplyMeleeIndicatorStyle()
     StartMeleeIndicatorTicker()
+    UpdateAudioSync()
     CreateSettings()
     HookBlizzardEditMode()
     SyncWithBlizzardEditMode()
