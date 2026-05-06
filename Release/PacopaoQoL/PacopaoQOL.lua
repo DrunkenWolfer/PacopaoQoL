@@ -1,6 +1,6 @@
 ﻿local addonName, ns = ...
 
-local ADDON_TITLE = "PacopaoQOL"
+local ADDON_TITLE = "PacopaoQoL"
 local DB_NAME = "PacopaoQOLDB"
 local settingsCategoryID
 local SettingsLib = LibStub and LibStub("LibEQOLSettingsMode-1.0", true)
@@ -8,7 +8,7 @@ local SettingsLib = LibStub and LibStub("LibEQOLSettingsMode-1.0", true)
 local defaults = {
     profile = {
         sonido_reenviar_efectos = false,
-        sonido_canal_efectos = "Master", -- Master, Music, Ambience, Dialog
+        sonido_canal_efectos = "Master", -- Valores internos de WoW: Master, Music, Ambience, Dialog
         sonido_mantener_audio_sincronizado = false,
         ui_indicador_zona_montura = false,
         ui_indicador_zona_montura_pos = {
@@ -29,6 +29,7 @@ local defaults = {
             x = 0,
             y = 0,
         },
+        grupos_auto_confirm_role_checks = false,
     },
 }
 
@@ -111,8 +112,31 @@ local meleeIndicatorFrame
 local meleeIndicatorTicker
 local meleeIndicatorEventsFrame
 local audioSyncFrame
+local roleCheckAutoConfirmInitialized = false
 local function IsBlizzardEditModeActive()
     return EditModeManagerFrame and EditModeManagerFrame:IsShown()
+end
+
+local function IsAutoConfirmRoleChecksEnabled()
+    local p = GetProfile()
+    return p and p.grupos_auto_confirm_role_checks == true
+end
+
+local function InitAutoConfirmRoleChecks()
+    if roleCheckAutoConfirmInitialized then
+        return
+    end
+    roleCheckAutoConfirmInitialized = true
+
+    if not LFDRoleCheckPopupAcceptButton then
+        return
+    end
+
+    LFDRoleCheckPopupAcceptButton:HookScript("OnShow", function(self)
+        if IsAutoConfirmRoleChecksEnabled() then
+            self:Click()
+        end
+    end)
 end
 
 hooksecurefunc("PlaySound", function(soundKitID, channel)
@@ -469,27 +493,21 @@ local function CreateSettings()
     Settings.RegisterAddOnCategory(rootCategory)
     settingsCategoryID = rootCategory:GetID()
 
-    local soundCategory, soundLayout = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Sonido")
-    local mountsCategory, mountsLayout = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Monturas")
-    local combatCategory, combatLayout = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Combate")
+    local soundCategory = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Sonido")
+    local mountsCategory = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Monturas")
 
-    local function AddFeatureHeader(layout, title)
-        local header = Settings.CreateElementInitializer("SettingsListSectionHeaderTemplate", {
-            name = "|cffffffff" .. title .. "|r",
-        })
-        layout:AddInitializer(header)
-    end
+    local combatCategory = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Combate")
 
-    local soundSectionExpandedPredicate = nil
+    local groupsCategory = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Automatizaciones")
+
+    local soundIsExpanded = nil
     if SettingsLib and SettingsLib.CreateExpandableSection then
         local _, isExpanded = SettingsLib:CreateExpandableSection(soundCategory, {
             name = "Canal de Efectos UI",
             expanded = true,
             colorizeTitle = true,
         })
-        soundSectionExpandedPredicate = isExpanded
-    else
-        AddFeatureHeader(soundLayout, "Canal de Efectos UI")
+        soundIsExpanded = isExpanded
     end
 
     local settingEnable = Settings.RegisterProxySetting(
@@ -509,15 +527,15 @@ local function CreateSettings()
 
     local enableTooltip = "Reenvía los sonidos de interfaz a otro canal para que no se mezclen con SFX de combate."
     local soundEnableCheckbox = Settings.CreateCheckbox(soundCategory, settingEnable, enableTooltip)
-    if soundSectionExpandedPredicate then
-        soundEnableCheckbox:AddShownPredicate(soundSectionExpandedPredicate)
+    if soundIsExpanded then
+        soundEnableCheckbox:AddShownPredicate(soundIsExpanded)
     end
 
     local channels = {
-        Master = "Master",
-        Music = "Music",
-        Ambience = "Ambience",
-        Dialog = "Dialog",
+        Master = "Principal",
+        Music = "Música",
+        Ambience = "Ambiente",
+        Dialog = "Diálogo",
     }
 
     local function GetChannelOptions()
@@ -554,8 +572,8 @@ local function CreateSettings()
     dropdown:AddModifyPredicate(function()
         return IsForwardEnabled()
     end)
-    if soundSectionExpandedPredicate then
-        dropdown:AddShownPredicate(soundSectionExpandedPredicate)
+    if soundIsExpanded then
+        dropdown:AddShownPredicate(soundIsExpanded)
     end
 
     local settingAudioSync = Settings.RegisterProxySetting(
@@ -579,20 +597,18 @@ local function CreateSettings()
         settingAudioSync,
         "Reinicia audio si cambia el dispositivo de salida para evitar desincronización."
     )
-    if soundSectionExpandedPredicate then
-        soundSyncCheckbox:AddShownPredicate(soundSectionExpandedPredicate)
+    if soundIsExpanded then
+        soundSyncCheckbox:AddShownPredicate(soundIsExpanded)
     end
 
-    local mountsSectionExpandedPredicate = nil
+    local mountsIsExpanded = nil
     if SettingsLib and SettingsLib.CreateExpandableSection then
         local _, isExpanded = SettingsLib:CreateExpandableSection(mountsCategory, {
             name = "Indicador de Zona Montable",
             expanded = true,
             colorizeTitle = true,
         })
-        mountsSectionExpandedPredicate = isExpanded
-    else
-        AddFeatureHeader(mountsLayout, "Indicador de Zona Montable")
+        mountsIsExpanded = isExpanded
     end
 
     local settingMountIndicator = Settings.RegisterProxySetting(
@@ -617,8 +633,8 @@ local function CreateSettings()
         settingMountIndicator,
         "Muestra un icono cuando puedes montar en la zona actual."
     )
-    if mountsSectionExpandedPredicate then
-        mountIndicatorCheckbox:AddShownPredicate(mountsSectionExpandedPredicate)
+    if mountsIsExpanded then
+        mountIndicatorCheckbox:AddShownPredicate(mountsIsExpanded)
     end
 
     local settingMountUnlock = Settings.RegisterProxySetting(
@@ -642,8 +658,8 @@ local function CreateSettings()
         settingMountUnlock,
         "Permite mover el icono fuera del Modo Edición de Blizzard."
     )
-    if mountsSectionExpandedPredicate then
-        mountUnlockCheckbox:AddShownPredicate(mountsSectionExpandedPredicate)
+    if mountsIsExpanded then
+        mountUnlockCheckbox:AddShownPredicate(mountsIsExpanded)
     end
 
     local settingMountScale = Settings.RegisterProxySetting(
@@ -669,27 +685,25 @@ local function CreateSettings()
     end)
     local mountScaleSlider =
         Settings.CreateSlider(mountsCategory, settingMountScale, sliderOptions, "Escala visual del icono.")
-    if mountsSectionExpandedPredicate then
-        mountScaleSlider:AddShownPredicate(mountsSectionExpandedPredicate)
+    if mountsIsExpanded then
+        mountScaleSlider:AddShownPredicate(mountsIsExpanded)
     end
 
-    local combatSectionExpandedPredicate = nil
+    local combatMeleeIsExpanded = nil
     if SettingsLib and SettingsLib.CreateExpandableSection then
         local _, isExpanded = SettingsLib:CreateExpandableSection(combatCategory, {
-            name = "Melee Range Display",
+            name = "Indicador de rango de melee",
             expanded = true,
             colorizeTitle = true,
         })
-        combatSectionExpandedPredicate = isExpanded
-    else
-        AddFeatureHeader(combatLayout, "Melee Range Display")
+        combatMeleeIsExpanded = isExpanded
     end
 
     local settingMeleeEnable = Settings.RegisterProxySetting(
         combatCategory,
         "PACOQOL_combat_melee_indicator_enabled",
         Settings.VarType.Boolean,
-        "Indicador de Rango Melee",
+        "Activar indicador fuera de melee",
         false,
         function()
             local p = GetProfile()
@@ -706,8 +720,8 @@ local function CreateSettings()
         settingMeleeEnable,
         "Muestra una cruz cuando el objetivo está fuera de rango melee."
     )
-    if combatSectionExpandedPredicate then
-        meleeEnableCheckbox:AddShownPredicate(combatSectionExpandedPredicate)
+    if combatMeleeIsExpanded then
+        meleeEnableCheckbox:AddShownPredicate(combatMeleeIsExpanded)
     end
 
     local settingMeleeUnlock = Settings.RegisterProxySetting(
@@ -730,8 +744,8 @@ local function CreateSettings()
         settingMeleeUnlock,
         "Permite mover la cruz fuera del Modo Edición."
     )
-    if combatSectionExpandedPredicate then
-        meleeUnlockCheckbox:AddShownPredicate(combatSectionExpandedPredicate)
+    if combatMeleeIsExpanded then
+        meleeUnlockCheckbox:AddShownPredicate(combatMeleeIsExpanded)
     end
 
     local settingMeleeSize = Settings.RegisterProxySetting(
@@ -755,9 +769,14 @@ local function CreateSettings()
     meleeSizeOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, function(value)
         return string.format("%d", value)
     end)
-    local meleeSizeSlider = Settings.CreateSlider(combatCategory, settingMeleeSize, meleeSizeOptions, "Tamaño de la cruz.")
-    if combatSectionExpandedPredicate then
-        meleeSizeSlider:AddShownPredicate(combatSectionExpandedPredicate)
+    local meleeSizeSlider = Settings.CreateSlider(
+        combatCategory,
+        settingMeleeSize,
+        meleeSizeOptions,
+        "Tamaño de la cruz."
+    )
+    if combatMeleeIsExpanded then
+        meleeSizeSlider:AddShownPredicate(combatMeleeIsExpanded)
     end
     meleeSizeSlider:AddModifyPredicate(function()
         local p = GetProfile()
@@ -785,16 +804,40 @@ local function CreateSettings()
     meleeOpacityOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, function(value)
         return string.format("%.2f", value)
     end)
-    local meleeOpacitySlider =
-        Settings.CreateSlider(combatCategory, settingMeleeOpacity, meleeOpacityOptions, "Opacidad de la cruz.")
-    if combatSectionExpandedPredicate then
-        meleeOpacitySlider:AddShownPredicate(combatSectionExpandedPredicate)
+    local meleeOpacitySlider = Settings.CreateSlider(
+        combatCategory,
+        settingMeleeOpacity,
+        meleeOpacityOptions,
+        "Opacidad de la cruz."
+    )
+    if combatMeleeIsExpanded then
+        meleeOpacitySlider:AddShownPredicate(combatMeleeIsExpanded)
     end
     meleeOpacitySlider:AddModifyPredicate(function()
         local p = GetProfile()
         return p and p.combat_melee_indicator_enabled == true
     end)
 
+    local settingAutoConfirmRoleChecks = Settings.RegisterProxySetting(
+        groupsCategory,
+        "PACOQOL_grupos_auto_confirm_role_checks",
+        Settings.VarType.Boolean,
+        "Auto-confirmar rol",
+        false,
+        function()
+            return IsAutoConfirmRoleChecksEnabled()
+        end,
+        function(value)
+            local p = GetProfile()
+            p.grupos_auto_confirm_role_checks = value and true or false
+        end
+    )
+
+    local autoConfirmRoleChecksCheckbox = Settings.CreateCheckbox(
+        groupsCategory,
+        settingAutoConfirmRoleChecks,
+        "Confirma automáticamente tu rol cuando aparece una comprobación de rol (incluye LFG y solicitudes del líder al apuntar al grupo)."
+    )
 
     local info = Settings.CreateElementInitializer("SettingsListSectionHeaderTemplate", {
         name = "Comando: /pqol",
@@ -838,6 +881,7 @@ boot:SetScript("OnEvent", function(_, event, loadedName)
     ApplyMeleeIndicatorStyle()
     StartMeleeIndicatorTicker()
     UpdateAudioSync()
+    InitAutoConfirmRoleChecks()
     CreateSettings()
     HookBlizzardEditMode()
     SyncWithBlizzardEditMode()
@@ -845,4 +889,3 @@ boot:SetScript("OnEvent", function(_, event, loadedName)
     RefreshMeleeIndicator()
     Print("Cargado. Usa /pqol para configurar.")
 end)
-

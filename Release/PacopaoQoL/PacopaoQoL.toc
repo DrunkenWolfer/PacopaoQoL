@@ -1,5 +1,5 @@
 ﻿## Interface: 120005
-## Title: PacopaoQOL
+## Title: PacopaoQoL
 ## Notes: QoL tools para WoW
 ## Author: Pacopao
 ## Version: 0.1.0
@@ -8,4 +8,4 @@
 ## Category-esES: Interfaz de usuario
 ## Category-esMX: Interfaz de usuario
 
-PacopaoQOL.lua
+PacopaoQoL.lua
