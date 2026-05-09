@@ -9,4 +9,19 @@
 ## Category-esES: Interfaz de usuario
 ## Category-esMX: Interfaz de usuario
 
+SoundKits/Registry.lua
+SoundKits/DEATHKNIGHT.lua
+SoundKits/DEMONHUNTER.lua
+SoundKits/DRUID.lua
+SoundKits/EVOKER.lua
+SoundKits/HUNTER.lua
+SoundKits/MAGE.lua
+SoundKits/MONK.lua
+SoundKits/PALADIN.lua
+SoundKits/PRIEST.lua
+SoundKits/ROGUE.lua
+SoundKits/SHAMAN.lua
+SoundKits/WARLOCK.lua
+SoundKits/WARRIOR.lua
+SoundKits/Misc.lua
 PacopaoQoL.lua

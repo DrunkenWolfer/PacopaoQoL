@@ -1,0 +1,147 @@
+﻿Addon para World of Warcraft Midnight 12.0.5 (67314) (Comercial x64) o superior.
+No ejecutar validaciones Lua locales.
+
+Estado funcional actual (vigente):
+- Comando: `/pqol` para abrir el panel del addon.
+- Menú de Settings (Blizzard) con categorías: `Sonido`, `Monturas`, `Combate`, `Automatizaciones`.
+- Patrón de UI activo:
+  - `Sonido`, `Monturas` y `Combate`: bloques desplegables en panel derecho (patrón WilduTools validado).
+  - `Automatizaciones`: sin desplegables por el momento.
+
+Sonido:
+- Canal de Efectos UI (desplegable):
+  - `Separar efectos UI del combate`.
+  - `Canal de salida` (Master/Music/Ambience/Dialog).
+- Varios (desplegable):
+  - `Mantener audio sincronizado` (portado de EnhanceQoL).
+
+Monturas:
+- Indicador de zona montable (desplegable):
+  - Muestra icono cuando se puede montar.
+  - `Desbloquear icono` para mover fuera de Modo Edición.
+  - Slider de tamaño.
+
+Combate:
+- Indicador de rango de melee (desplegable):
+  - Muestra cruz cuando el objetivo está fuera de rango melee.
+  - `Activar indicador fuera de melee`.
+  - `Desbloquear cruz` para mover fuera de Modo Edición.
+  - Sliders de tamaño y opacidad.
+
+Automatizaciones:
+- Auto-confirmar rol:
+  - Confirma automáticamente comprobaciones de rol (incluye LFG y cuando el líder apunta al grupo).
+
+Resumen técnico (implementación):
+- Archivo principal de desarrollo: `PacopaoQOL.lua` (raíz del addon).
+- Base de datos: `PacopaoQOLDB.profile` con defaults definidos en `defaults.profile`.
+- Hook de sonido UI:
+  - `hooksecurefunc("PlaySound", ...)`.
+  - Reenvío solo para canal `SFX`/sin canal.
+  - Guard anti-recursión (`isReplaying`).
+- Audio sync (EnhanceQoL-like):
+  - Evento `VOICE_CHAT_OUTPUT_DEVICES_UPDATED`.
+  - `SetCVar("Sound_OutputDriverIndex", "0")`.
+  - Reinicio de audio con `Sound_GameSystem_RestartSoundSystem()` evitando cinemáticas activas.
+- Indicador montura:
+  - Frame propio con atlas `Fyrakk-Flying-Icon`.
+  - Estado montable vía `C_Spell.IsSpellUsable(23214)`.
+  - Eventos: `PLAYER_ENTERING_WORLD`, `MOUNT_JOURNAL_USABILITY_CHANGED`, `PLAYER_MOUNT_DISPLAY_CHANGED`, `ZONE_CHANGED_NEW_AREA`, `UPDATE_SHAPESHIFT_FORM`.
+  - Movimiento por drag (`OnDragStart/OnDragStop`) + persistencia de posición en DB.
+- Indicador melee:
+  - Frame en centro (0,0) por defecto, textura `Interface\\RaidFrame\\ReadyCheck-NotReady`.
+  - Rango melee por mapa de spells por spec + fallback `C_Spell.IsSpellInRange(6603, "target")` y `CheckInteractDistance("target", 3)`.
+  - Actualización por ticker `0.1s` + eventos de target/spec/world/combat.
+  - Movimiento por drag + persistencia de posición.
+- Integración con Modo Edición Blizzard:
+  - Detección por `EditModeManagerFrame:IsShown()`.
+  - Hook `OnShow/OnHide` para sincronizar estado de edición visual.
+- Patrón de secciones desplegables:
+  - Implementación funcional confirmada (casos `Sonido`, `Monturas`, `Combate`):
+    - `local SettingsLib = LibStub and LibStub("LibEQOLSettingsMode-1.0", true)` al inicio del archivo.
+    - Crear sección con:
+      - `local _, isExpanded = SettingsLib:CreateExpandableSection(categoria, { name=..., expanded=true, colorizeTitle=true })`
+    - Para cada control interno del bloque:
+      - `control:AddShownPredicate(isExpanded)`
+    - Este patrón replica el comportamiento de `!WilduTools` (ejemplo: `Addons Tweaks > Zygor Tweaks`).
+  - Patrón NO funcional / descartado (para este addon):
+    - Fallback manual con `SettingsExpandableSectionTemplate` + hooks `OnExpandedChanged/OnClick`.
+    - Síntoma observado: el click cambia estado interno pero no redibuja al instante; solo se refleja al cambiar de categoría y volver.
+  - Regla práctica para futuro:
+    - Si se quiere desplegable derecho, usar SIEMPRE el patrón Wildu (`CreateExpandableSection` + `AddShownPredicate`).
+    - Evitar implementar desplegable manual propio en este addon.
+  - Orden recomendado para implementar nuevos bloques desplegables:
+    1. Crear categoría base: `Settings.RegisterVerticalLayoutSubcategory(rootCategory, "...")`.
+    2. Crear `CreateExpandableSection` sobre esa categoría.
+    3. Crear settings (`RegisterProxySetting`) en la categoría base.
+    4. Crear controles (`CreateCheckbox`, `CreateSlider`, `CreateDropdown`) en la categoría base.
+    5. Aplicar `AddShownPredicate(isExpanded)` a cada control del bloque.
+    6. Validar en juego: colapsar/expandir debe reaccionar instantáneo sin cambiar de categoría.
+  - Dependencia importante:
+    - El desplegable funcional depende de `LibEQOLSettingsMode-1.0` disponible en runtime.
+    - Si se rompe en futuro, comprobar primero disponibilidad real de `SettingsLib` antes de tocar lógica de UI.
+
+Incidencia histórica documentada (para no repetir):
+- Se intentó migrar a subcategorías izquierdas para evitar el bug de colapsado.
+- Se intentó fallback manual del template nativo con múltiples estrategias de refresco (`RepairDisplay`, `OpenToCategory`, hooks de botón).
+- Resultado: comportamiento inconsistente persistente.
+- Solución final estable: volver al patrón exacto de WilduTools para el bloque de `Combate`.
+
+Incidencia técnica resuelta: solapamiento/no desplazamiento entre desplegables hermanos (caso `Sonido`)
+- Síntoma exacto:
+  - Al expandir `Canal de Efectos UI`, la barra de `Varios` no se movía hacia abajo para dejar espacio.
+  - Resultado visual: el header de `Varios` quedaba superpuesto/no reposicionado respecto al contenido expandido del bloque superior.
+- Causa raíz:
+  - Orden incorrecto de registro de inicializadores en la categoría `Sonido`.
+  - Se estaba creando el segundo desplegable (`Varios`) antes de registrar completamente los controles del primer desplegable (`Canal de Efectos UI`).
+  - En el pipeline de Settings, el layout vertical depende del orden de inserción de inicializadores; si el orden lógico no se respeta, los bloques hermanos no recalculan su posición como se espera en expansión.
+- Solución aplicada (funcional y validada):
+  1. Crear desplegable `Canal de Efectos UI`.
+  2. Registrar TODOS sus controles (`Separar efectos...`, `Canal de salida`) y sus predicados (`AddShownPredicate(soundIsExpanded)`).
+  3. Crear después el desplegable `Varios`.
+  4. Registrar sus controles (`Mantener audio sincronizado`) con su predicado (`AddShownPredicate(soundMiscIsExpanded)`).
+  - Este orden asegura que el segundo header se posicione después del bloque completo del primero.
+- Refuerzo técnico adicional aplicado:
+  - Hook de refresco de layout al expand/collapse de cada sección:
+    - `SettingsInbound.RepairDisplay()` y fallback a `SettingsPanel:RepairDisplay()`.
+  - Aunque útil como red de seguridad, NO sustituye al orden correcto de inicialización.
+- Regla obligatoria para futuros desplegables hermanos en una misma categoría:
+  - Construcción estrictamente secuencial por bloque:
+    - `CreateExpandableSection(A)` -> controles de A -> `CreateExpandableSection(B)` -> controles de B -> ...
+  - No intercalar la creación de múltiples headers antes de registrar controles de cada bloque.
+- Verificación mínima en juego (checklist):
+  1. Expandir el primer desplegable.
+  2. Confirmar que el segundo header baja inmediatamente.
+  3. Colapsar/expandir varias veces sin cambiar de categoría.
+  4. Repetir tras `/reload`.
+
+Notas de flujo de trabajo:
+- `Release/PacopaoQoL` se considera rama estable manual.
+- No sincronizar automáticamente cambios de desarrollo a `Release` salvo petición explícita del usuario.
+
+Actualización técnica (Midnight) - sonido por habilidades y limitaciones:
+- Estructura de SoundKits añadida:
+  - Carpeta `SoundKits/` con registro central en `Registry.lua`.
+  - Archivos por clase (`DRUID.lua`, etc.) con 2 bloques:
+    1) `RegisterClassSoundKits("CLASE", { KEY = soundKitID })`
+    2) `RegisterClassSpellKeys("CLASE", { [spellID] = "KEY" })`
+  - `Misc.lua` se usa para sonidos comunes manuales (sin lógica de autoataques).
+- Trigger funcional confirmado para sonidos personalizados:
+  - Reproducción al lanzar habilidad vía `UNIT_SPELLCAST_SUCCEEDED` + mapeo `spellID -> KEY -> soundKitID`.
+  - Este flujo sí funciona en Midnight (validado con varios spells de Druida).
+- Comandos útiles:
+  - `/pqol sound <soundKitID>` para prueba directa de ID.
+  - `/pqol sound class <CLASE> <KEY>` para prueba por entrada de tabla.
+  - `/pqol sound list <CLASE>` para listar entradas de una clase.
+- Opción en Settings:
+  - `Sonido > Varios > Solo SFX de mis skills`:
+    - ON: habilita reproducción personalizada por spellID de jugador.
+    - OFF: deshabilita esta reproducción.
+- Barreras/limitaciones confirmadas en Midnight:
+  - Detección automática de `soundKitID` al lanzar habilidades NO fiable / no soportada en este entorno.
+  - Se intentó con hooks y eventos (`PlaySound`, `C_Sound.PlaySound`, `PlaySoundFile`, `UNIT_SPELLCAST_*`, `COMBAT_LOG_EVENT_UNFILTERED`) sin resultado estable.
+  - Funcionalidad retirada por decisión explícita para evitar complejidad sin retorno.
+  - Autoataques (`SWING_*`, dodge/parry/block) por combat log descartados por limitaciones del entorno Midnight.
+- Convención recomendada para tablas de clase:
+  - Mantener keys en inglés ASCII (`MOONFIRE`, `WILD_CHARGE`, etc.) y comentarios en español.
+  - Evitar tildes/`ñ` en identificadores Lua.

@@ -499,16 +499,55 @@ local function CreateSettings()
     local combatCategory = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Combate")
 
     local groupsCategory = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Automatizaciones")
+    local function RefreshSettingsLayout()
+        local inbound = _G.SettingsInbound
+        local panel = _G.SettingsPanel
+        if inbound and inbound.RepairDisplay then
+            inbound.RepairDisplay()
+        elseif panel and panel.RepairDisplay then
+            panel:RepairDisplay()
+        end
+    end
+
+    local function AttachRefreshToExpandableSection(sectionInitializer)
+        if not sectionInitializer then
+            return
+        end
+        local originalInitFrame = sectionInitializer.InitFrame
+        sectionInitializer.InitFrame = function(self, frame)
+            if originalInitFrame then
+                originalInitFrame(self, frame)
+            end
+
+            local previousOnExpandedChanged = frame.OnExpandedChanged
+            frame.OnExpandedChanged = function(frameSelf, expanded)
+                if previousOnExpandedChanged then
+                    previousOnExpandedChanged(frameSelf, expanded)
+                end
+                RefreshSettingsLayout()
+            end
+
+            if frame.Button and not frame.Button._pqolExpandRefreshHooked then
+                frame.Button._pqolExpandRefreshHooked = true
+                frame.Button:HookScript("OnClick", function()
+                    C_Timer.After(0, RefreshSettingsLayout)
+                end)
+            end
+        end
+    end
 
     local soundIsExpanded = nil
     if SettingsLib and SettingsLib.CreateExpandableSection then
-        local _, isExpanded = SettingsLib:CreateExpandableSection(soundCategory, {
+        local section, isExpanded = SettingsLib:CreateExpandableSection(soundCategory, {
             name = "Canal de Efectos UI",
             expanded = true,
             colorizeTitle = true,
         })
+        AttachRefreshToExpandableSection(section)
         soundIsExpanded = isExpanded
     end
+
+    local soundMiscIsExpanded = nil
 
     local settingEnable = Settings.RegisterProxySetting(
         soundCategory,
@@ -576,6 +615,16 @@ local function CreateSettings()
         dropdown:AddShownPredicate(soundIsExpanded)
     end
 
+    if SettingsLib and SettingsLib.CreateExpandableSection then
+        local section, isExpanded = SettingsLib:CreateExpandableSection(soundCategory, {
+            name = "Varios",
+            expanded = true,
+            colorizeTitle = true,
+        })
+        AttachRefreshToExpandableSection(section)
+        soundMiscIsExpanded = isExpanded
+    end
+
     local settingAudioSync = Settings.RegisterProxySetting(
         soundCategory,
         "PACOQOL_sonido_mantener_audio_sincronizado",
@@ -597,17 +646,18 @@ local function CreateSettings()
         settingAudioSync,
         "Reinicia audio si cambia el dispositivo de salida para evitar desincronización."
     )
-    if soundIsExpanded then
-        soundSyncCheckbox:AddShownPredicate(soundIsExpanded)
+    if soundMiscIsExpanded then
+        soundSyncCheckbox:AddShownPredicate(soundMiscIsExpanded)
     end
 
     local mountsIsExpanded = nil
     if SettingsLib and SettingsLib.CreateExpandableSection then
-        local _, isExpanded = SettingsLib:CreateExpandableSection(mountsCategory, {
+        local section, isExpanded = SettingsLib:CreateExpandableSection(mountsCategory, {
             name = "Indicador de Zona Montable",
             expanded = true,
             colorizeTitle = true,
         })
+        AttachRefreshToExpandableSection(section)
         mountsIsExpanded = isExpanded
     end
 
@@ -691,11 +741,12 @@ local function CreateSettings()
 
     local combatMeleeIsExpanded = nil
     if SettingsLib and SettingsLib.CreateExpandableSection then
-        local _, isExpanded = SettingsLib:CreateExpandableSection(combatCategory, {
+        local section, isExpanded = SettingsLib:CreateExpandableSection(combatCategory, {
             name = "Indicador de rango de melee",
             expanded = true,
             colorizeTitle = true,
         })
+        AttachRefreshToExpandableSection(section)
         combatMeleeIsExpanded = isExpanded
     end
 
@@ -817,6 +868,17 @@ local function CreateSettings()
         local p = GetProfile()
         return p and p.combat_melee_indicator_enabled == true
     end)
+
+    local combatMiscIsExpanded = nil
+    if SettingsLib and SettingsLib.CreateExpandableSection then
+        local section, isExpanded = SettingsLib:CreateExpandableSection(combatCategory, {
+            name = "Varios",
+            expanded = true,
+            colorizeTitle = true,
+        })
+        AttachRefreshToExpandableSection(section)
+        combatMiscIsExpanded = isExpanded
+    end
 
     local settingAutoConfirmRoleChecks = Settings.RegisterProxySetting(
         groupsCategory,

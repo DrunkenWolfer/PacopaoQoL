@@ -4,12 +4,15 @@ local ADDON_TITLE = "PacopaoQoL"
 local DB_NAME = "PacopaoQOLDB"
 local settingsCategoryID
 local SettingsLib = LibStub and LibStub("LibEQOLSettingsMode-1.0", true)
+local GetForwardChannel
+local IsOwnSpellSFXEnabled
 
 local defaults = {
     profile = {
         sonido_reenviar_efectos = false,
         sonido_canal_efectos = "Master", -- Valores internos de WoW: Master, Music, Ambience, Dialog
         sonido_mantener_audio_sincronizado = false,
+        sonido_solo_mis_sfx = false,
         ui_indicador_zona_montura = false,
         ui_indicador_zona_montura_pos = {
             point = "CENTER",
@@ -30,6 +33,7 @@ local defaults = {
             y = 0,
         },
         grupos_auto_confirm_role_checks = false,
+        sound_discovered_spells = {},
     },
 }
 
@@ -41,6 +45,289 @@ local ignoredSoundIDs = {
 
 local function Print(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff00ccff" .. ADDON_TITLE .. "|r: " .. msg)
+end
+
+local function TryPlaySoundKitID(soundKitID)
+    if not soundKitID or soundKitID <= 0 then
+        return false
+    end
+
+    local channel = GetForwardChannel()
+    local playFunc = PlaySound or (C_Sound and C_Sound.PlaySound)
+    if not playFunc then
+        return false
+    end
+
+    local ok, willPlay = pcall(playFunc, soundKitID, channel)
+    if not ok then
+        return false
+    end
+
+    return willPlay == true
+end
+
+local function GetSoundKitLibrary()
+    return ns and ns.SoundKitLibrary
+end
+
+local function ResolveClassSoundKitID(classToken, abilityKey)
+    local lib = GetSoundKitLibrary()
+    if not lib or not lib.classes then
+        return nil
+    end
+    if not classToken or not abilityKey then
+        return nil
+    end
+
+    local classTable = lib.classes[classToken:upper()]
+    if not classTable then
+        return nil
+    end
+
+    local value = classTable[abilityKey:upper()]
+    if type(value) ~= "number" or value <= 0 then
+        return nil
+    end
+    return value
+end
+
+local function ResolveMiscSoundKitID(key)
+    local lib = GetSoundKitLibrary()
+    if not lib or not lib.misc or not key then
+        return nil
+    end
+    local value = lib.misc[key:upper()]
+    if type(value) ~= "number" or value <= 0 then
+        return nil
+    end
+    return value
+end
+
+local function ResolveClassSoundKitIDBySpellID(classToken, spellID)
+    local lib = GetSoundKitLibrary()
+    if not lib or not lib.classSpellKeys then
+        return nil
+    end
+    if not classToken or type(spellID) ~= "number" then
+        return nil
+    end
+
+    local classMap = lib.classSpellKeys[classToken:upper()]
+    if not classMap then
+        return nil
+    end
+
+    local abilityKey = classMap[spellID]
+    if type(abilityKey) ~= "string" or abilityKey == "" then
+        return nil
+    end
+
+    return ResolveClassSoundKitID(classToken, abilityKey)
+end
+
+local function ResolveClassAbilityKeyBySpellID(classToken, spellID)
+    local lib = GetSoundKitLibrary()
+    if not lib or not lib.classSpellKeys or not classToken or type(spellID) ~= "number" then
+        return nil
+    end
+    local classMap = lib.classSpellKeys[classToken:upper()]
+    if not classMap then
+        return nil
+    end
+    return classMap[spellID]
+end
+
+local function MakeAbilityKeyFromSpellName(spellName)
+    if type(spellName) ~= "string" or spellName == "" then
+        return nil
+    end
+    local key = spellName:upper()
+    key = key:gsub("%s+", "_")
+    key = key:gsub("[^A-Z0-9_]", "_")
+    key = key:gsub("_+", "_")
+    key = key:gsub("^_", "")
+    key = key:gsub("_$", "")
+    if key == "" then
+        return nil
+    end
+    return key
+end
+
+local function TrackDiscoveredSpell(classToken, spellID)
+    if type(spellID) ~= "number" or spellID <= 0 then
+        return
+    end
+    local classUpper = classToken and classToken:upper()
+    if not classUpper then
+        return
+    end
+    if ResolveClassAbilityKeyBySpellID(classUpper, spellID) then
+        return
+    end
+
+    local p = GetProfile()
+    if not p then
+        return
+    end
+    p.sound_discovered_spells = p.sound_discovered_spells or {}
+    p.sound_discovered_spells[classUpper] = p.sound_discovered_spells[classUpper] or {}
+
+    if p.sound_discovered_spells[classUpper][spellID] then
+        return
+    end
+
+    local spellName = C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)
+    local key = MakeAbilityKeyFromSpellName(spellName) or ("SPELL_" .. tostring(spellID))
+    p.sound_discovered_spells[classUpper][spellID] = key
+end
+
+local function PrintDiscoveredSpellsForClass(classToken)
+    local classUpper = classToken and classToken:upper()
+    if not classUpper then
+        Print("Uso: /pqol sound dumpclass <CLASE>")
+        return
+    end
+
+    local p = GetProfile()
+    local discovered = p and p.sound_discovered_spells and p.sound_discovered_spells[classUpper]
+    if not discovered then
+        Print(string.format("No hay spells pendientes para %s.", classUpper))
+        return
+    end
+
+    local ids = {}
+    for spellID in pairs(discovered) do
+        ids[#ids + 1] = spellID
+    end
+    table.sort(ids)
+
+    if #ids == 0 then
+        Print(string.format("No hay spells pendientes para %s.", classUpper))
+        return
+    end
+
+    Print(string.format("Pendientes para %s (pegar en RegisterClassSoundKits):", classUpper))
+    for _, spellID in ipairs(ids) do
+        local key = discovered[spellID]
+        Print(string.format("%s = 0,", key))
+    end
+    Print(string.format("Pendientes para %s (pegar en RegisterClassSpellKeys):", classUpper))
+    for _, spellID in ipairs(ids) do
+        local key = discovered[spellID]
+        Print(string.format("[%d] = \"%s\",", spellID, key))
+    end
+end
+
+local classSoundEventFrame
+local lastPlayerCombatLogSpellID
+local lastCombatLogSpellID
+local lastCombatLogSubEvent
+local lastCombatLogSourceName
+local soundEventDebugEnabled = false
+local function EnsureClassSoundEvents()
+    if classSoundEventFrame then
+        return
+    end
+
+    classSoundEventFrame = CreateFrame("Frame")
+    classSoundEventFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+    classSoundEventFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+    classSoundEventFrame:SetScript("OnEvent", function(_, event, ...)
+        if event == "UNIT_SPELLCAST_SUCCEEDED" then
+            local unitTarget, _, spellID = ...
+            if not IsOwnSpellSFXEnabled() then
+                return
+            end
+            if unitTarget ~= "player" then
+                return
+            end
+            if type(spellID) ~= "number" or spellID <= 0 then
+                return
+            end
+
+            lastPlayerCombatLogSpellID = spellID
+            local _, classToken = UnitClass("player")
+            TrackDiscoveredSpell(classToken, spellID)
+            local soundKitID = ResolveClassSoundKitIDBySpellID(classToken, spellID)
+            if soundKitID then
+                TryPlaySoundKitID(soundKitID)
+            end
+            return
+        end
+
+        local log = { CombatLogGetCurrentEventInfo() }
+        local subEvent = log[2]
+        local sourceGUID = log[4]
+        local sourceName = log[5]
+
+        local playerGUID = UnitGUID("player")
+        local playerName = UnitName("player")
+        if sourceGUID ~= playerGUID and sourceName ~= playerName then
+            return
+        end
+
+        if subEvent ~= "SPELL_CAST_SUCCESS" and subEvent ~= "SPELL_AURA_APPLIED" and subEvent ~= "SPELL_AURA_REFRESH" then
+            return
+        end
+
+        if not IsOwnSpellSFXEnabled() then
+            return
+        end
+        local spellID = log[12]
+
+        if type(spellID) == "number" and spellID > 0 then
+            lastCombatLogSpellID = spellID
+            lastCombatLogSubEvent = subEvent
+            lastCombatLogSourceName = sourceName
+            if soundEventDebugEnabled then
+                Print(string.format("DEBUG %s spellID=%d", subEvent, spellID))
+            end
+        end
+
+        lastPlayerCombatLogSpellID = spellID
+        local _, classToken = UnitClass("player")
+        TrackDiscoveredSpell(classToken, spellID)
+        local soundKitID = ResolveClassSoundKitIDBySpellID(classToken, spellID)
+        if soundKitID then
+            TryPlaySoundKitID(soundKitID)
+        end
+    end)
+end
+
+local function PrintClassSoundList(classToken)
+    local lib = GetSoundKitLibrary()
+    if not lib or not lib.classes then
+        Print("Libreria de sonidos no disponible.")
+        return
+    end
+
+    local classUpper = classToken and classToken:upper()
+    if not classUpper then
+        Print("Uso: /pqol sound list <CLASE>")
+        return
+    end
+
+    local classTable = lib.classes[classUpper]
+    if not classTable then
+        Print(string.format("Clase no encontrada: %s", classUpper))
+        return
+    end
+
+    local keys = {}
+    for key in pairs(classTable) do
+        keys[#keys + 1] = key
+    end
+    table.sort(keys)
+
+    if #keys == 0 then
+        Print(string.format("Clase %s sin entradas todavia (plantilla creada).", classUpper))
+        return
+    end
+
+    Print(string.format("SoundKits de %s (%d):", classUpper, #keys))
+    for _, key in ipairs(keys) do
+        Print(string.format("- %s = %d", key, classTable[key]))
+    end
 end
 
 local function EnsureDB()
@@ -64,7 +351,12 @@ local function IsForwardEnabled()
     return p and p.sonido_reenviar_efectos == true
 end
 
-local function GetForwardChannel()
+IsOwnSpellSFXEnabled = function()
+    local p = GetProfile()
+    return p and p.sonido_solo_mis_sfx == true
+end
+
+GetForwardChannel = function()
     local p = GetProfile()
     return (p and p.sonido_canal_efectos) or "Master"
 end
@@ -106,6 +398,7 @@ local function UpdateAudioSync()
 end
 
 local isReplaying = false
+
 local mountIndicatorFrame
 local mountIndicatorEditMode = false
 local meleeIndicatorFrame
@@ -499,16 +792,55 @@ local function CreateSettings()
     local combatCategory = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Combate")
 
     local groupsCategory = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Automatizaciones")
+    local function RefreshSettingsLayout()
+        local inbound = _G.SettingsInbound
+        local panel = _G.SettingsPanel
+        if inbound and inbound.RepairDisplay then
+            inbound.RepairDisplay()
+        elseif panel and panel.RepairDisplay then
+            panel:RepairDisplay()
+        end
+    end
+
+    local function AttachRefreshToExpandableSection(sectionInitializer)
+        if not sectionInitializer then
+            return
+        end
+        local originalInitFrame = sectionInitializer.InitFrame
+        sectionInitializer.InitFrame = function(self, frame)
+            if originalInitFrame then
+                originalInitFrame(self, frame)
+            end
+
+            local previousOnExpandedChanged = frame.OnExpandedChanged
+            frame.OnExpandedChanged = function(frameSelf, expanded)
+                if previousOnExpandedChanged then
+                    previousOnExpandedChanged(frameSelf, expanded)
+                end
+                RefreshSettingsLayout()
+            end
+
+            if frame.Button and not frame.Button._pqolExpandRefreshHooked then
+                frame.Button._pqolExpandRefreshHooked = true
+                frame.Button:HookScript("OnClick", function()
+                    C_Timer.After(0, RefreshSettingsLayout)
+                end)
+            end
+        end
+    end
 
     local soundIsExpanded = nil
     if SettingsLib and SettingsLib.CreateExpandableSection then
-        local _, isExpanded = SettingsLib:CreateExpandableSection(soundCategory, {
+        local section, isExpanded = SettingsLib:CreateExpandableSection(soundCategory, {
             name = "Canal de Efectos UI",
             expanded = true,
             colorizeTitle = true,
         })
+        AttachRefreshToExpandableSection(section)
         soundIsExpanded = isExpanded
     end
+
+    local soundMiscIsExpanded = nil
 
     local settingEnable = Settings.RegisterProxySetting(
         soundCategory,
@@ -576,6 +908,16 @@ local function CreateSettings()
         dropdown:AddShownPredicate(soundIsExpanded)
     end
 
+    if SettingsLib and SettingsLib.CreateExpandableSection then
+        local section, isExpanded = SettingsLib:CreateExpandableSection(soundCategory, {
+            name = "Varios",
+            expanded = true,
+            colorizeTitle = true,
+        })
+        AttachRefreshToExpandableSection(section)
+        soundMiscIsExpanded = isExpanded
+    end
+
     local settingAudioSync = Settings.RegisterProxySetting(
         soundCategory,
         "PACOQOL_sonido_mantener_audio_sincronizado",
@@ -597,17 +939,41 @@ local function CreateSettings()
         settingAudioSync,
         "Reinicia audio si cambia el dispositivo de salida para evitar desincronización."
     )
-    if soundIsExpanded then
-        soundSyncCheckbox:AddShownPredicate(soundIsExpanded)
+    if soundMiscIsExpanded then
+        soundSyncCheckbox:AddShownPredicate(soundMiscIsExpanded)
+    end
+
+    local settingOwnSpellSFX = Settings.RegisterProxySetting(
+        soundCategory,
+        "PACOQOL_sonido_solo_mis_sfx",
+        Settings.VarType.Boolean,
+        "Solo SFX de mis skills",
+        false,
+        function()
+            return IsOwnSpellSFXEnabled()
+        end,
+        function(value)
+            local p = GetProfile()
+            p.sonido_solo_mis_sfx = value and true or false
+        end
+    )
+    local ownSpellSFXCheckbox = Settings.CreateCheckbox(
+        soundCategory,
+        settingOwnSpellSFX,
+        "Reproduce sonidos personalizados solo al lanzar tus propias habilidades mapeadas por spellID."
+    )
+    if soundMiscIsExpanded then
+        ownSpellSFXCheckbox:AddShownPredicate(soundMiscIsExpanded)
     end
 
     local mountsIsExpanded = nil
     if SettingsLib and SettingsLib.CreateExpandableSection then
-        local _, isExpanded = SettingsLib:CreateExpandableSection(mountsCategory, {
+        local section, isExpanded = SettingsLib:CreateExpandableSection(mountsCategory, {
             name = "Indicador de Zona Montable",
             expanded = true,
             colorizeTitle = true,
         })
+        AttachRefreshToExpandableSection(section)
         mountsIsExpanded = isExpanded
     end
 
@@ -691,11 +1057,12 @@ local function CreateSettings()
 
     local combatMeleeIsExpanded = nil
     if SettingsLib and SettingsLib.CreateExpandableSection then
-        local _, isExpanded = SettingsLib:CreateExpandableSection(combatCategory, {
+        local section, isExpanded = SettingsLib:CreateExpandableSection(combatCategory, {
             name = "Indicador de rango de melee",
             expanded = true,
             colorizeTitle = true,
         })
+        AttachRefreshToExpandableSection(section)
         combatMeleeIsExpanded = isExpanded
     end
 
@@ -818,6 +1185,17 @@ local function CreateSettings()
         return p and p.combat_melee_indicator_enabled == true
     end)
 
+    local combatMiscIsExpanded = nil
+    if SettingsLib and SettingsLib.CreateExpandableSection then
+        local section, isExpanded = SettingsLib:CreateExpandableSection(combatCategory, {
+            name = "Varios",
+            expanded = true,
+            colorizeTitle = true,
+        })
+        AttachRefreshToExpandableSection(section)
+        combatMiscIsExpanded = isExpanded
+    end
+
     local settingAutoConfirmRoleChecks = Settings.RegisterProxySetting(
         groupsCategory,
         "PACOQOL_grupos_auto_confirm_role_checks",
@@ -847,6 +1225,129 @@ end
 
 SLASH_PACOPAOQOL1 = "/pqol"
 SlashCmdList.PACOPAOQOL = function(msg)
+    local trimmed = msg and msg:match("^%s*(.-)%s*$") or ""
+    local cmd, arg = trimmed:match("^(%S+)%s*(.-)$")
+
+    if cmd and (cmd:lower() == "sound" or cmd:lower() == "sonido") then
+        local subcmd, rest = arg:match("^(%S+)%s*(.-)$")
+        if not subcmd then
+            Print("Uso: /pqol sound <soundKitID> | /pqol sound list <CLASE> | /pqol sound class <CLASE> <HABILIDAD> | /pqol sound misc <NOMBRE>")
+            return
+        end
+
+        local subcmdLower = subcmd:lower()
+
+        if subcmdLower == "list" then
+            PrintClassSoundList(rest)
+            return
+        end
+
+        if subcmdLower == "lastspell" then
+            if lastPlayerCombatLogSpellID then
+                Print(string.format("Ultimo spellID detectado en combate: %d", lastPlayerCombatLogSpellID))
+            else
+                Print("Aun no hay spellID detectado. Lanza una habilidad y vuelve a probar.")
+            end
+            return
+        end
+
+        if subcmdLower == "lastspellany" then
+            if lastCombatLogSpellID then
+                Print(
+                    string.format(
+                        "Ultimo spellID global: %d (%s, fuente: %s)",
+                        lastCombatLogSpellID,
+                        lastCombatLogSubEvent or "?",
+                        lastCombatLogSourceName or "?"
+                    )
+                )
+            else
+                Print("Aun no hay spellID global detectado.")
+            end
+            return
+        end
+
+        if subcmdLower == "dumpclass" then
+            PrintDiscoveredSpellsForClass(rest)
+            return
+        end
+
+        if subcmdLower == "debug" then
+            local value = rest and rest:match("^%s*(.-)%s*$"):lower() or ""
+            if value == "on" then
+                soundEventDebugEnabled = true
+                Print("DEBUG de sonidos activado.")
+            elseif value == "off" then
+                soundEventDebugEnabled = false
+                Print("DEBUG de sonidos desactivado.")
+            else
+                Print("Uso: /pqol sound debug on|off")
+            end
+            return
+        end
+
+        if subcmdLower == "class" then
+            local classToken, abilityKey = rest:match("^(%S+)%s+(%S+)$")
+            if not classToken or not abilityKey then
+                Print("Uso: /pqol sound class <CLASE> <HABILIDAD>")
+                return
+            end
+
+            local soundKitID = ResolveClassSoundKitID(classToken, abilityKey)
+            if not soundKitID then
+                Print(string.format("No encontrado: %s.%s", classToken:upper(), abilityKey:upper()))
+                return
+            end
+
+            if TryPlaySoundKitID(soundKitID) then
+                Print(
+                    string.format(
+                        "Reproduciendo %s.%s (%d) en canal %s.",
+                        classToken:upper(),
+                        abilityKey:upper(),
+                        soundKitID,
+                        GetForwardChannel()
+                    )
+                )
+            else
+                Print(string.format("No se pudo reproducir %s.%s (%d).", classToken:upper(), abilityKey:upper(), soundKitID))
+            end
+            return
+        end
+
+        if subcmdLower == "misc" then
+            local key = rest and rest:match("^%s*(.-)%s*$")
+            if not key or key == "" then
+                Print("Uso: /pqol sound misc <NOMBRE>")
+                return
+            end
+            local soundKitID = ResolveMiscSoundKitID(key)
+            if not soundKitID then
+                Print(string.format("No encontrado en misc: %s", key:upper()))
+                return
+            end
+            if TryPlaySoundKitID(soundKitID) then
+                Print(string.format("Reproduciendo misc.%s (%d) en canal %s.", key:upper(), soundKitID, GetForwardChannel()))
+            else
+                Print(string.format("No se pudo reproducir misc.%s (%d).", key:upper(), soundKitID))
+            end
+            return
+        end
+
+        local soundKitID = tonumber(arg)
+        if not soundKitID then
+            Print("Uso: /pqol sound <soundKitID> | /pqol sound list <CLASE> | /pqol sound class <CLASE> <HABILIDAD> | /pqol sound misc <NOMBRE>")
+            return
+        end
+
+        if TryPlaySoundKitID(soundKitID) then
+            Print(string.format("Reproduciendo soundKitID %d en canal %s.", soundKitID, GetForwardChannel()))
+        else
+            Print(string.format("No se pudo reproducir soundKitID %d.", soundKitID))
+        end
+        return
+    end
+
     if InCombatLockdown() then
         Print("No se puede abrir configuración en combate.")
         return
@@ -880,6 +1381,7 @@ boot:SetScript("OnEvent", function(_, event, loadedName)
     EnsureMeleeIndicatorEvents()
     ApplyMeleeIndicatorStyle()
     StartMeleeIndicatorTicker()
+    EnsureClassSoundEvents()
     UpdateAudioSync()
     InitAutoConfirmRoleChecks()
     CreateSettings()
@@ -887,5 +1389,5 @@ boot:SetScript("OnEvent", function(_, event, loadedName)
     SyncWithBlizzardEditMode()
     RefreshMountIndicator()
     RefreshMeleeIndicator()
-    Print("Cargado. Usa /pqol para configurar.")
+    Print("Cargado. Usa /pqol para configurar. Pruebas: /pqol sound <id>, /pqol sound class <CLASE> <HABILIDAD>, /pqol sound misc <NOMBRE>.")
 end)
