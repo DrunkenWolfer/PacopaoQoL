@@ -33,6 +33,7 @@ local defaults = {
             y = 0,
         },
         grupos_auto_confirm_role_checks = false,
+        mapas_farmhud_tooltips_sin_tecla = false,
         sound_discovered_spells = {},
     },
 }
@@ -231,7 +232,6 @@ local function EnsureClassSoundEvents()
 
     classSoundEventFrame = CreateFrame("Frame")
     classSoundEventFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
-    classSoundEventFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
     classSoundEventFrame:SetScript("OnEvent", function(_, event, ...)
         if event == "UNIT_SPELLCAST_SUCCEEDED" then
             local unitTarget, _, spellID = ...
@@ -252,44 +252,6 @@ local function EnsureClassSoundEvents()
             if soundKitID then
                 TryPlaySoundKitID(soundKitID)
             end
-            return
-        end
-
-        local log = { CombatLogGetCurrentEventInfo() }
-        local subEvent = log[2]
-        local sourceGUID = log[4]
-        local sourceName = log[5]
-
-        local playerGUID = UnitGUID("player")
-        local playerName = UnitName("player")
-        if sourceGUID ~= playerGUID and sourceName ~= playerName then
-            return
-        end
-
-        if subEvent ~= "SPELL_CAST_SUCCESS" and subEvent ~= "SPELL_AURA_APPLIED" and subEvent ~= "SPELL_AURA_REFRESH" then
-            return
-        end
-
-        if not IsOwnSpellSFXEnabled() then
-            return
-        end
-        local spellID = log[12]
-
-        if type(spellID) == "number" and spellID > 0 then
-            lastCombatLogSpellID = spellID
-            lastCombatLogSubEvent = subEvent
-            lastCombatLogSourceName = sourceName
-            if soundEventDebugEnabled then
-                Print(string.format("DEBUG %s spellID=%d", subEvent, spellID))
-            end
-        end
-
-        lastPlayerCombatLogSpellID = spellID
-        local _, classToken = UnitClass("player")
-        TrackDiscoveredSpell(classToken, spellID)
-        local soundKitID = ResolveClassSoundKitIDBySpellID(classToken, spellID)
-        if soundKitID then
-            TryPlaySoundKitID(soundKitID)
         end
     end)
 end
@@ -349,6 +311,11 @@ end
 local function IsForwardEnabled()
     local p = GetProfile()
     return p and p.sonido_reenviar_efectos == true
+end
+
+local function IsFarmHudTooltipsAlwaysEnabled()
+    local p = GetProfile()
+    return p and p.mapas_farmhud_tooltips_sin_tecla == true
 end
 
 IsOwnSpellSFXEnabled = function()
@@ -781,6 +748,98 @@ local function HookBlizzardEditMode()
     EditModeManagerFrame:HookScript("OnHide", SyncWithBlizzardEditMode)
 end
 
+local farmHudMousePatchHooked = false
+local farmHudMousePatchApplying = false
+local farmHudMinimapMouseHooked = false
+
+local function CallFarmHudToggleMouse(farmHud, force)
+    farmHudMousePatchApplying = true
+    local ok, err = pcall(farmHud.ToggleMouse, farmHud, force)
+    farmHudMousePatchApplying = false
+    if not ok and err then
+        geterrorhandler()(err)
+    end
+end
+
+local function ApplyFarmHudMouseClickThrough(enabled)
+    local minimap = _G.Minimap
+    if not minimap then
+        return
+    end
+
+    if enabled then
+        if minimap.SetMouseMotionEnabled then
+            minimap:SetMouseMotionEnabled(true)
+        end
+        if minimap.SetMouseClickEnabled then
+            minimap:SetMouseClickEnabled(false)
+        end
+    elseif minimap.SetMouseClickEnabled then
+        minimap:SetMouseClickEnabled(true)
+    end
+end
+
+local function ApplyFarmHudMousePatch(disableWhenOff)
+    local farmHud = _G.FarmHud
+    local minimap = _G.Minimap
+    if not farmHud or type(farmHud.ToggleMouse) ~= "function" or not minimap or not minimap.IsMouseEnabled then
+        return
+    end
+    if not farmHud.IsShown or not farmHud:IsShown() then
+        ApplyFarmHudMouseClickThrough(false)
+        return
+    end
+
+    if IsFarmHudTooltipsAlwaysEnabled() then
+        if not minimap:IsMouseEnabled() then
+            CallFarmHudToggleMouse(farmHud, false)
+        end
+        ApplyFarmHudMouseClickThrough(true)
+    elseif disableWhenOff and minimap:IsMouseEnabled() then
+        ApplyFarmHudMouseClickThrough(false)
+        CallFarmHudToggleMouse(farmHud, true)
+    elseif disableWhenOff then
+        ApplyFarmHudMouseClickThrough(false)
+    end
+end
+
+local function HookFarmHudMousePatch()
+    local farmHud = _G.FarmHud
+    if farmHudMousePatchHooked or not farmHud or type(farmHud.ToggleMouse) ~= "function" then
+        return
+    end
+
+    farmHudMousePatchHooked = true
+    farmHud:HookScript("OnShow", function()
+        C_Timer.After(0, ApplyFarmHudMousePatch)
+    end)
+    farmHud:HookScript("OnHide", function()
+        ApplyFarmHudMouseClickThrough(false)
+    end)
+    hooksecurefunc(farmHud, "ToggleMouse", function()
+        if farmHudMousePatchApplying or not IsFarmHudTooltipsAlwaysEnabled() then
+            return
+        end
+        C_Timer.After(0, ApplyFarmHudMousePatch)
+    end)
+    ApplyFarmHudMousePatch()
+end
+
+local function HookFarmHudMinimapMousePatch()
+    local minimap = _G.Minimap
+    if farmHudMinimapMouseHooked or not minimap or type(minimap.EnableMouse) ~= "function" then
+        return
+    end
+
+    farmHudMinimapMouseHooked = true
+    hooksecurefunc(minimap, "EnableMouse", function()
+        if not IsFarmHudTooltipsAlwaysEnabled() then
+            return
+        end
+        C_Timer.After(0, ApplyFarmHudMousePatch)
+    end)
+end
+
 local function CreateSettings()
     local rootCategory, rootLayout = Settings.RegisterVerticalLayoutCategory(ADDON_TITLE)
     Settings.RegisterAddOnCategory(rootCategory)
@@ -788,6 +847,7 @@ local function CreateSettings()
 
     local soundCategory = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Sonido")
     local mountsCategory = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Monturas")
+    local mapsCategory = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Mapas")
 
     local combatCategory = Settings.RegisterVerticalLayoutSubcategory(rootCategory, "Combate")
 
@@ -1053,6 +1113,43 @@ local function CreateSettings()
         Settings.CreateSlider(mountsCategory, settingMountScale, sliderOptions, "Escala visual del icono.")
     if mountsIsExpanded then
         mountScaleSlider:AddShownPredicate(mountsIsExpanded)
+    end
+
+    local mapsFarmHudIsExpanded = nil
+    if SettingsLib and SettingsLib.CreateExpandableSection then
+        local section, isExpanded = SettingsLib:CreateExpandableSection(mapsCategory, {
+            name = "FarmHud",
+            expanded = true,
+            colorizeTitle = true,
+        })
+        AttachRefreshToExpandableSection(section)
+        mapsFarmHudIsExpanded = isExpanded
+    end
+
+    local settingFarmHudTooltipsAlways = Settings.RegisterProxySetting(
+        mapsCategory,
+        "PACOQOL_mapas_farmhud_tooltips_sin_tecla",
+        Settings.VarType.Boolean,
+        "Tooltips de FarmHud sin mantener tecla",
+        false,
+        function()
+            return IsFarmHudTooltipsAlwaysEnabled()
+        end,
+        function(value)
+            local p = GetProfile()
+            p.mapas_farmhud_tooltips_sin_tecla = value and true or false
+            HookFarmHudMousePatch()
+            HookFarmHudMinimapMousePatch()
+            ApplyFarmHudMousePatch(true)
+        end
+    )
+    local farmHudTooltipsAlwaysCheckbox = Settings.CreateCheckbox(
+        mapsCategory,
+        settingFarmHudTooltipsAlways,
+        "Mantiene activado el mouse sobre FarmHud para ver tooltips de plantas, minerales y otros iconos sin pulsar modificadores."
+    )
+    if mapsFarmHudIsExpanded then
+        farmHudTooltipsAlwaysCheckbox:AddShownPredicate(mapsFarmHudIsExpanded)
     end
 
     local combatMeleeIsExpanded = nil
@@ -1365,6 +1462,16 @@ boot:SetScript("OnEvent", function(_, event, loadedName)
     if event == "PLAYER_LOGIN" then
         HookBlizzardEditMode()
         SyncWithBlizzardEditMode()
+        HookFarmHudMousePatch()
+        HookFarmHudMinimapMousePatch()
+        ApplyFarmHudMousePatch()
+        return
+    end
+
+    if loadedName == "FarmHud" then
+        HookFarmHudMousePatch()
+        HookFarmHudMinimapMousePatch()
+        ApplyFarmHudMousePatch()
         return
     end
 
@@ -1385,8 +1492,11 @@ boot:SetScript("OnEvent", function(_, event, loadedName)
     UpdateAudioSync()
     InitAutoConfirmRoleChecks()
     CreateSettings()
+    HookFarmHudMousePatch()
+    HookFarmHudMinimapMousePatch()
     HookBlizzardEditMode()
     SyncWithBlizzardEditMode()
+    ApplyFarmHudMousePatch()
     RefreshMountIndicator()
     RefreshMeleeIndicator()
     Print("Cargado. Usa /pqol para configurar. Pruebas: /pqol sound <id>, /pqol sound class <CLASE> <HABILIDAD>, /pqol sound misc <NOMBRE>.")

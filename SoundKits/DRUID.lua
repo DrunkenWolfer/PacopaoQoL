@@ -33,12 +33,12 @@ ns.RegisterClassSoundKits("DRUID", {
     IRONFUR = 64070, -- Pelaje de hierro
     MAUL = 1324548, -- Magullar (Maul)
     RAZE = 0, -- Devastar
-    FRENZIED_REGENERATION = 60600, -- Regeneracion frenetica
+    FRENZIED_REGENERATION = 172670, -- Regeneracion frenetica
     BARKSKIN = 20412, -- Corteza
     SURVIVAL_INSTINCTS = 15228, -- Instintos de supervivencia
     INCARNATION_GUARDIAN_OF_URSOC = 7350646, -- Encarnacion: Guardian de Ursoc
 
-    REJUVENATION = 0, -- Rejuvenecimiento
+    REJUVENATION = 172670, -- Rejuvenecimiento
     REGROWTH = 0, -- Recrecimiento
     LIFEBLOOM = 0, -- Flor de vida
     WILD_GROWTH = 0, -- Crecimiento salvaje
